@@ -18,6 +18,7 @@ use std::os::raw::c_char;
 use std::ptr;
 use std::string::ToString;
 use std::sync::Arc;
+use std::time::Instant;
 
 use libc::c_void;
 use rdkafka_sys as rdsys;
@@ -286,8 +287,18 @@ impl<C: ClientContext> Client<C> {
     }
 
     pub(crate) fn poll_event(&self, queue: &NativeQueue, timeout: Timeout) -> Option<NativeEvent> {
-        let event = unsafe { NativeEvent::from_ptr(queue.poll(timeout)) };
-        if let Some(ev) = event {
+        let now = if timeout.is_zero() || timeout == Timeout::Never {
+            None
+        } else {
+            Some(Instant::now())
+        };
+
+        let get_event = || {
+            let timeout = now.map_or_else(|| timeout, |now| timeout.saturating_sub(now.elapsed()));
+            unsafe { NativeEvent::from_ptr(queue.poll(timeout)) }
+        };
+
+        while let Some(ev) = get_event() {
             let evtype = unsafe { rdsys::rd_kafka_event_type(ev.ptr()) };
             match evtype {
                 rdsys::RD_KAFKA_EVENT_LOG => self.handle_log_event(ev.ptr()),
